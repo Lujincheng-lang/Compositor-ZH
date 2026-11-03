@@ -36,6 +36,7 @@ async function main() {
     await page.locator('[name="w"]').fill("640");
     await page.locator('[name="h"]').fill("480");
     await page.locator('[name="name"]').fill("中文验证");
+    await page.locator('[name="background"]').selectOption("transparent");
     await page.locator('.dialog [type="submit"]').click();
     await page.waitForFunction(
       () => window.compositor.editor.doc?.width === 640,
@@ -423,7 +424,7 @@ async function main() {
     assert.deepEqual(result.undoSize, [100, 80]);
   });
   await test("所有工具图标均实际渲染", async () => {
-    assert.equal(await page.locator(".tools [data-tool] svg").count(), 12);
+    assert.equal(await page.locator(".tools [data-tool] svg").count(), 13);
   });
   await test("16 位 PSD 在解码前拒绝，保留当前项目", async () => {
     const result = await page.evaluate(async () => {
@@ -446,6 +447,287 @@ async function main() {
       return rejected && JSON.stringify(e.snapshot()) === before;
     });
     assert(result);
+  });
+  // Photoshop-style interaction checks on a fresh 400×300 document.
+  await page.evaluate(() => {
+    const api = window.compositor,
+      e = api.editor;
+    e.newDocument(400, 300, 72, "交互验证", true);
+    const l = e.active;
+    l.name = "背景";
+    const top = document.createElement("canvas");
+    top.width = 100;
+    top.height = 100;
+    top.getContext("2d").fillStyle = "#e33";
+    top.getContext("2d").fillRect(0, 0, 100, 100);
+    e.duplicate();
+    Object.assign(e.active, { name: "红块", canvas: top, x: 50, y: 50 });
+    e.commit("添加红块");
+    api.setTool("move");
+    api.fit();
+  });
+  const box = await page.locator(".stage").boundingBox();
+  const q = (x, y) => ({
+    x: box.x + x * (box.width / 400),
+    y: box.y + y * (box.height / 300),
+  });
+  const layerState = () =>
+    page.evaluate(() => {
+      const l = window.compositor.editor.active;
+      return {
+        name: l.name,
+        x: l.x,
+        y: l.y,
+        scaleX: l.scaleX,
+        scaleY: l.scaleY,
+        rotation: l.rotation,
+        history: window.compositor.editor.history.length,
+      };
+    });
+  await test("自由变换：角点等比缩放、Esc 取消、Enter 一次提交", async () => {
+    await page.locator(".viewport").focus();
+    await page.keyboard.press("Control+t");
+    assert(await page.evaluate(() => window.compositor.state().transforming));
+    const before = await layerState();
+    await drag(q(150, 150), q(200, 200));
+    let s = await layerState();
+    assert(Math.abs(s.scaleX - 1.5) < 0.05 && Math.abs(s.scaleY - 1.5) < 0.05);
+    assert.equal(Math.round(s.x), 50);
+    await page.keyboard.press("Escape");
+    s = await layerState();
+    assert.equal(s.scaleX, 1);
+    assert.equal(s.history, before.history);
+    await page.keyboard.press("Control+t");
+    await drag(q(150, 150), q(200, 200));
+    await drag(q(100, 100), q(130, 110));
+    await page.keyboard.press("Enter");
+    s = await layerState();
+    assert.equal(s.history, before.history + 1);
+    assert(Math.abs(s.x - 80) < 2 && Math.abs(s.y - 60) < 2);
+    assert.equal(
+      await page.evaluate(() => window.compositor.editor.history.at(-1).label),
+      "自由变换",
+    );
+  });
+  await test("变换控件框外拖动旋转，Shift 吸附 15°", async () => {
+    const r = await page.evaluate(() => {
+      const l = window.compositor.editor.active;
+      return { x: l.x, y: l.y, w: 100 * l.scaleX };
+    });
+    const corner = q(r.x + r.w + 10, r.y - 10);
+    await page.keyboard.down("Shift");
+    await drag(corner, q(r.x + r.w + 60, r.y + r.w / 2));
+    await page.keyboard.up("Shift");
+    const s = await layerState();
+    assert.equal(s.rotation % 15, 0);
+    assert.notEqual(s.rotation, 0);
+    await page.keyboard.press("Control+z");
+    await page.waitForFunction(
+      () => window.compositor.editor.active.rotation === 0,
+    );
+  });
+  await test("移动工具 Ctrl+单击自动选择、Alt+拖动复制图层", async () => {
+    await page.evaluate(() => {
+      const e = window.compositor.editor;
+      e.doc.active = e.doc.layers[0].id;
+      e.notify();
+    });
+    await page.keyboard.down("Control");
+    await page.mouse.click(q(100, 80).x, q(100, 80).y);
+    await page.keyboard.up("Control");
+    assert.equal((await layerState()).name, "红块");
+    const count = await page.evaluate(
+      () => window.compositor.editor.doc.layers.length,
+    );
+    await page.keyboard.down("Alt");
+    await drag(q(100, 80), q(300, 220));
+    await page.keyboard.up("Alt");
+    const after = await page.evaluate(() => ({
+      n: window.compositor.editor.doc.layers.length,
+      name: window.compositor.editor.active.name,
+      label: window.compositor.editor.history.at(-1).label,
+    }));
+    assert.equal(after.n, count + 1);
+    assert.equal(after.name, "红块 副本");
+    assert.equal(after.label, "复制图层");
+  });
+  await test("图层面板拖动排序与 Alt+单击仅显示", async () => {
+    const names = () =>
+      page.evaluate(() =>
+        window.compositor.editor.doc.layers.map((l) => l.name),
+      );
+    assert.deepEqual(await names(), ["背景", "红块", "红块 副本"]);
+    const rows = page.locator(".layer-row");
+    const last = await rows.nth(2).boundingBox();
+    await rows.nth(0).dragTo(rows.nth(2), {
+      targetPosition: { x: 40, y: last.height - 4 },
+    });
+    await page.waitForFunction(
+      () => window.compositor.editor.doc.layers[0].name === "红块 副本",
+    );
+    assert.deepEqual(await names(), ["红块 副本", "背景", "红块"]);
+    await page
+      .locator('.layer-row:has-text("背景") .eye')
+      .click({ modifiers: ["Alt"] });
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.compositor.editor.doc.layers.map((l) => l.visible),
+      ),
+      [false, true, false],
+    );
+    await page
+      .locator('.layer-row:has-text("背景") .eye')
+      .click({ modifiers: ["Alt"] });
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.compositor.editor.doc.layers.map((l) => l.visible),
+      ),
+      [true, true, true],
+    );
+  });
+  await test("快捷键：D/X 颜色、[ ] 画笔大小、数字键不透明度、Ctrl+[ ] 图层顺序", async () => {
+    await page.locator(".viewport").focus();
+    await page.keyboard.press("b");
+    await page.keyboard.press("d");
+    await page.keyboard.press("x");
+    assert.deepEqual(
+      await page.evaluate(() => [
+        document.querySelector("#fg").value,
+        document.querySelector("#bg").value,
+      ]),
+      ["#ffffff", "#000000"],
+    );
+    await page.keyboard.press("d");
+    await page.keyboard.press("]");
+    await page.keyboard.press("5");
+    assert.deepEqual(
+      await page.evaluate(() => [
+        document.querySelector("#brush-size").value,
+        document.querySelector("#brush-opacity").value,
+      ]),
+      ["40", "50"],
+    );
+    await page.keyboard.press("0");
+    await page.keyboard.press("v");
+    await page.evaluate(() => {
+      const e = window.compositor.editor;
+      e.doc.active = e.doc.layers[0].id;
+      e.notify();
+    });
+    await page.keyboard.press("Control+Shift+BracketRight");
+    assert.equal(
+      await page.evaluate(
+        () => window.compositor.editor.doc.layers.at(-1).name,
+      ),
+      "红块 副本",
+    );
+  });
+  await test("滚轮平移、Ctrl+滚轮缩放", async () => {
+    const before = await page.evaluate(() => window.compositor.state());
+    await page.mouse.move(q(200, 150).x, q(200, 150).y);
+    await page.mouse.wheel(0, 40);
+    let s = await page.evaluate(() => window.compositor.state());
+    assert.equal(s.zoom, before.zoom);
+    assert(Math.abs(s.pan.y - (before.pan.y - 40)) < 1);
+    await page.keyboard.down("Control");
+    await page.mouse.wheel(0, -200);
+    await page.keyboard.up("Control");
+    s = await page.evaluate(() => window.compositor.state());
+    assert(s.zoom > before.zoom);
+    await page.evaluate(() => window.compositor.fit());
+  });
+  await test("裁剪工具：拖动控制点、Enter 确认且不删除像素", async () => {
+    await page.locator(".viewport").focus();
+    await page.keyboard.press("c");
+    const b = await page.locator(".stage").boundingBox(),
+      k = b.width / 400;
+    await drag(
+      { x: b.x + b.width, y: b.y + b.height },
+      { x: b.x + 300 * k, y: b.y + 200 * k },
+    );
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const r = window.compositor.state().cropRect;
+        return [r.w, r.h];
+      }),
+      [300, 200],
+    );
+    const sizes = await page.evaluate(() =>
+      window.compositor.editor.doc.layers.map((l) => l.canvas.width),
+    );
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(
+      () => window.compositor.editor.doc.width === 300,
+    );
+    assert.equal(
+      await page.evaluate(() => window.compositor.editor.doc.height),
+      200,
+    );
+    assert.deepEqual(
+      await page.evaluate(() =>
+        window.compositor.editor.doc.layers.map((l) => l.canvas.width),
+      ),
+      sizes,
+    );
+    await page.keyboard.press("v");
+  });
+  await test("图像大小按比例缩放图层、画布大小按中心定位", async () => {
+    const r = await page.evaluate(() => {
+      const e = window.compositor.editor,
+        red = e.doc.layers.find((l) => l.name === "红块");
+      const x0 = red.x,
+        s0 = red.scaleX;
+      e.resizeImage(600, 400);
+      const scaled = [red.scaleX / s0, red.x / x0];
+      e.resizeCanvas(700, 500);
+      return { scaled, x: red.x, w: e.doc.width, h: e.doc.height };
+    });
+    assert.deepEqual(r.scaled, [2, 2]);
+    assert.equal(r.w, 700);
+    assert.equal(r.h, 500);
+  });
+  await test("存储写回同一项目，存储为重新选择路径", async () => {
+    const first = path.join(root, "test-output", "存储验证.cwin"),
+      second = path.join(root, "test-output", "存储为验证.cwin");
+    await app.evaluate(({ dialog }, dest) => {
+      globalThis.saveDialogs = 0;
+      dialog.showSaveDialog = async () => {
+        globalThis.saveDialogs++;
+        return { canceled: false, filePath: dest };
+      };
+    }, first);
+    await page.keyboard.press("Control+s");
+    await page.waitForFunction(() => !window.compositor.editor.dirty);
+    await page.evaluate(() => {
+      window.compositor.editor.active.name = "改名";
+      window.compositor.editor.commit("改名");
+    });
+    const mtime = (await fs.stat(first)).mtimeMs;
+    await page.keyboard.press("Control+s");
+    await page.waitForFunction(() => !window.compositor.editor.dirty);
+    assert.equal(await app.evaluate(() => globalThis.saveDialogs), 1);
+    assert((await fs.stat(first)).mtimeMs >= mtime);
+    await app.evaluate(({ dialog }, dest) => {
+      dialog.showSaveDialog = async () => {
+        globalThis.saveDialogs++;
+        return { canceled: false, filePath: dest };
+      };
+    }, second);
+    await page.keyboard.press("Control+Shift+s");
+    await page.waitForFunction(
+      (dest) => window.compositor.state().docPath === dest,
+      second,
+    );
+    assert.equal(await app.evaluate(() => globalThis.saveDialogs), 2);
+    const rejected = await page.evaluate(async () => {
+      try {
+        await window.desktop.write(new Uint8Array([1, 2, 3]), "C:/evil.cwin");
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert(rejected);
   });
   await page.evaluate(() => {
     window.compositor.editor.dirty = false;

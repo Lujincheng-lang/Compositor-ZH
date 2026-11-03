@@ -175,12 +175,43 @@ svg {
   align-items: center;
   gap: 7px;
 }
+.options .opt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.options .opt label input[type="number"] {
+  width: 56px;
+}
+.options .hint {
+  color: var(--muted);
+}
+.options output {
+  width: 34px;
+  color: var(--muted);
+}
+#commit-group {
+  margin-left: auto;
+  gap: 4px;
+}
+#commit-group + .tip {
+  margin-left: 12px;
+}
+#commit-group button {
+  padding: 3px 10px;
+  border: 1px solid #555;
+}
+#commit-group .commit {
+  background: #2c5d92;
+  border-color: #4d86c4;
+}
 .options .divider {
   height: 23px;
   border-left: 1px solid #555;
 }
 .options #tool-name {
-  width: 82px;
+  white-space: nowrap;
+  min-width: 82px;
   font-weight: 600;
 }
 .options input[type="range"] {
@@ -223,35 +254,79 @@ svg {
 }
 .colors {
   position: relative;
-  height: 55px;
+  height: 48px;
   width: 36px;
   margin-top: 12px;
 }
 .colors input {
   position: absolute;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   border: 1px solid #ccc;
   padding: 0;
   border-radius: 0;
+  cursor: pointer;
 }
 .colors #bg {
-  left: 11px;
-  top: 13px;
+  left: 12px;
+  top: 14px;
 }
 .colors #fg {
-  left: 0;
-  top: 0;
+  left: 1px;
+  top: 3px;
   z-index: 1;
+}
+.colors .swap {
+  position: absolute;
+  right: -4px;
+  top: -3px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+.colors .swap svg {
+  width: 11px;
+  height: 11px;
+}
+.colors .reset {
+  position: absolute;
+  left: -2px;
+  bottom: -4px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+}
+.colors .reset span {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border: 1px solid #bbb;
+}
+.colors .reset span:first-child {
+  left: 1px;
+  top: 1px;
+  background: #000;
+  z-index: 1;
+}
+.colors .reset span:last-child {
+  left: 4px;
+  top: 4px;
+  background: #fff;
 }
 .view {
   display: grid;
+  grid-template-columns: 20px 1fr;
   grid-template-rows: 31px 20px 1fr;
+  grid-template-areas:
+    "tabs tabs"
+    "corner rtop"
+    "rleft vp";
   min-width: 0;
   min-height: 0;
   position: relative;
 }
 .tabs {
+  grid-area: tabs;
   background: #202020;
   display: flex;
   align-items: stretch;
@@ -278,7 +353,14 @@ svg {
   border-radius: 0;
   padding: 4px 8px;
 }
+.ruler-corner {
+  grid-area: corner;
+  background: #343434;
+  border-bottom: 1px solid #181818;
+  border-right: 1px solid #181818;
+}
 .ruler-top {
+  grid-area: rtop;
   background: #343434;
   border-bottom: 1px solid #181818;
   overflow: hidden;
@@ -286,8 +368,31 @@ svg {
 .ruler-top canvas {
   height: 20px;
   width: 100%;
+  display: block;
+}
+.ruler-left {
+  grid-area: rleft;
+  background: #343434;
+  border-right: 1px solid #181818;
+  overflow: hidden;
+  min-height: 0;
+}
+.ruler-left canvas {
+  width: 20px;
+  height: 100%;
+  display: block;
+}
+body.no-rulers .view {
+  grid-template-columns: 0 1fr;
+  grid-template-rows: 31px 0 1fr;
+}
+body.no-rulers .ruler-top,
+body.no-rulers .ruler-left,
+body.no-rulers .ruler-corner {
+  display: none;
 }
 .viewport {
+  grid-area: vp;
   position: relative;
   overflow: hidden;
   background: #202020;
@@ -374,6 +479,19 @@ svg {
   padding: 0 11px;
   font-weight: 600;
 }
+.panel-heading[data-collapse] {
+  cursor: pointer;
+  user-select: none;
+}
+.panel-heading[data-collapse]::before {
+  content: "▾";
+  margin-right: 6px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.panel-heading.collapsed::before {
+  content: "▸";
+}
 .panel-heading .light {
   margin-left: auto;
   font-weight: 400;
@@ -385,6 +503,7 @@ svg {
   background: #262626;
 }
 .navigator canvas {
+  cursor: pointer;
   width: 100%;
   height: 105px;
   object-fit: contain;
@@ -459,6 +578,34 @@ svg {
   border-top: 2px solid var(--accent);
   padding-top: 7px;
 }
+.layer-locks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px 6px;
+  border-bottom: 1px solid #202020;
+  font-size: 11px;
+}
+.layer-locks button {
+  padding: 2px 5px;
+  border: 1px solid #4b4b4b;
+}
+.layer-locks button.on {
+  background: #4a5566;
+  border-color: #6a7a90;
+}
+.layer-locks svg {
+  width: 13px;
+  height: 13px;
+}
+.layer-locks .light {
+  color: var(--muted);
+}
+.scrub {
+  cursor: ew-resize;
+  user-select: none;
+  border-bottom: 1px dotted #777;
+}
 .layer-list {
   flex: 1;
   min-height: 90px;
@@ -507,8 +654,33 @@ svg {
   font-size: 11px;
 }
 .layer-row .lock {
-  opacity: 0.65;
+  opacity: 0.7;
+  padding: 2px;
+}
+.layer-row .lock svg {
   width: 13px;
+  height: 13px;
+}
+.layer-row.invisible img,
+.layer-row.invisible .name {
+  opacity: 0.45;
+}
+.layer-row .kind {
+  display: inline-block;
+  font: bold 10px "Segoe UI";
+  background: #555;
+  border-radius: 2px;
+  padding: 0 3px;
+  margin-right: 5px;
+}
+.layer-row.dragging {
+  opacity: 0.4;
+}
+.layer-row.drop-above {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.layer-row.drop-below {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .layer-row .mask {
   width: 29px;
@@ -571,6 +743,45 @@ svg {
 }
 .hidden {
   display: none !important;
+}
+.context-menu {
+  position: fixed;
+  z-index: 160;
+  background: #303030;
+  border: 1px solid #161616;
+  box-shadow: 0 8px 22px #0007;
+  min-width: 210px;
+  padding: 5px;
+}
+.context-menu button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 6px 11px;
+}
+.context-menu kbd {
+  color: var(--muted);
+  font: 11px "Segoe UI";
+  margin-left: 24px;
+}
+.context-menu hr {
+  border: 0;
+  border-top: 1px solid #505050;
+  margin: 5px;
+}
+.anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 22px);
+  gap: 2px;
+  width: 220px;
+}
+.dialog .anchor-grid input {
+  width: 22px !important;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 .modal-backdrop {
   position: fixed;
@@ -665,8 +876,19 @@ body.fullscreen .side,
 body.fullscreen .tools,
 body.fullscreen .statusbar,
 body.fullscreen .tabs,
-body.fullscreen .ruler-top {
+body.fullscreen .ruler-top,
+body.fullscreen .ruler-left,
+body.fullscreen .ruler-corner,
+body.hide-panels .options,
+body.hide-panels .tools,
+body.hide-panels .side {
   display: none;
+}
+body.hide-panels #app {
+  grid-template-rows: 30px 0 1fr 26px;
+}
+body.hide-panels .workspace {
+  grid-template-columns: 1fr;
 }
 body.fullscreen #app {
   grid-template-rows: 1fr;
@@ -675,7 +897,8 @@ body.fullscreen .workspace {
   grid-template-columns: 1fr;
 }
 body.fullscreen .view {
-  grid-template-rows: 1fr;
+  grid-template-columns: 0 1fr;
+  grid-template-rows: 0 0 1fr;
 }
 @media (max-width: 1100px) {
   .workspace {
@@ -684,7 +907,9 @@ body.fullscreen .view {
   .options {
     gap: 7px;
   }
-  .options .tip {
+  .options .tip,
+  .options .hint,
+  .options input[type="range"] {
     display: none;
   }
   .brand {
