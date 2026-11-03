@@ -1,9 +1,11 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 let win,
   dirty = false,
   allowClose = false;
+// Project paths the user picked through a native dialog; only these may be overwritten by "存储".
+const projectPaths = new Set();
 const MAX = 512 * 1024 * 1024;
 if (process.env.COMPOSITOR_TEST === "1")
   app.setPath(
@@ -25,6 +27,8 @@ async function atomicWrite(target, bytes) {
   }
 }
 app.whenReady().then(() => {
+  // No native menu: the in-app menu owns shortcuts such as Ctrl+R and Ctrl+W.
+  Menu.setApplicationMenu(null);
   win = new BrowserWindow({
     icon: path.join(__dirname, "icon.png"),
     width: 1480,
@@ -81,8 +85,11 @@ ipcMain.handle("file:open", async () => {
     result.filePaths.map(async (file) => {
       const stat = await fs.stat(file);
       if (stat.size > MAX) throw Error("文件超过 512 MB");
+      const isProject = path.extname(file).toLowerCase() === ".cwin";
+      if (isProject) projectPaths.add(file);
       return {
         name: path.basename(file),
+        path: isProject ? file : null,
         bytes: new Uint8Array(await fs.readFile(file)),
       };
     }),
@@ -133,7 +140,18 @@ ipcMain.handle("file:save", async (_, request) => {
   });
   if (result.canceled) return null;
   await atomicWrite(result.filePath, bytes);
+  if (request.type === "cwin") projectPaths.add(result.filePath);
   return result.filePath;
+});
+ipcMain.handle("file:write", async (_, request) => {
+  const target = String(request.path || "");
+  if (
+    !projectPaths.has(target) ||
+    path.extname(target).toLowerCase() !== ".cwin"
+  )
+    throw Error("只能直接存储到已打开或已存储的项目文件");
+  await atomicWrite(target, checkedBytes(request.bytes));
+  return target;
 });
 ipcMain.handle("recovery:write", async (_, bytes) => {
   await atomicWrite(

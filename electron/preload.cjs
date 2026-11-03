@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("desktop", {
   openComp: () => ipcRenderer.invoke("comp:open"),
   save: (bytes, name, type) =>
     ipcRenderer.invoke("file:save", { bytes, name, type }),
+  write: (bytes, path) => ipcRenderer.invoke("file:write", { bytes, path }),
   recover: () => ipcRenderer.invoke("recovery:read"),
   autosave: (bytes) => ipcRenderer.invoke("recovery:write", bytes),
   dirty: (value) => ipcRenderer.send("document:dirty", value),

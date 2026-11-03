@@ -82,6 +82,67 @@ export function layer(name, w, h) {
     text: null,
   };
 }
+export function cloneLayer(l, name = l.name + " 副本") {
+  const copy = layer(name, l.canvas.width, l.canvas.height);
+  Object.assign(copy, {
+    ...l,
+    id: copy.id,
+    name,
+    canvas: copy.canvas,
+    mask: null,
+  });
+  copy.canvas.getContext("2d").drawImage(l.canvas, 0, 0);
+  if (l.mask) {
+    copy.mask = canvas(l.mask.width, l.mask.height);
+    copy.mask.getContext("2d").drawImage(l.mask, 0, 0);
+  }
+  if (l.text) copy.text = structuredClone(l.text);
+  return copy;
+}
+export function layerBounds(l, opaqueOnly = false) {
+  let x0 = 0,
+    y0 = 0,
+    x1 = l.canvas.width,
+    y1 = l.canvas.height;
+  if (opaqueOnly) {
+    const src = pixels(l),
+      data = src
+        .getContext("2d")
+        .getImageData(0, 0, src.width, src.height).data;
+    ((x0 = src.width), (y0 = src.height), (x1 = 0), (y1 = 0));
+    for (let y = 0; y < src.height; y++)
+      for (let x = 0; x < src.width; x++)
+        if (data[(y * src.width + x) * 4 + 3]) {
+          if (x < x0) x0 = x;
+          if (y < y0) y0 = y;
+          if (x + 1 > x1) x1 = x + 1;
+          if (y + 1 > y1) y1 = y + 1;
+        }
+    if (x1 <= x0 || y1 <= y0) return null;
+  }
+  const pts = [
+    { x: x0, y: y0 },
+    { x: x1, y: y0 },
+    { x: x1, y: y1 },
+    { x: x0, y: y1 },
+  ].map((p) => worldPoint(l, p));
+  const xs = pts.map((p) => p.x),
+    ys = pts.map((p) => p.y),
+    x = Math.min(...xs),
+    y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+export function opaqueAt(l, p) {
+  if (!l.visible) return false;
+  const q = localPoint(l, p),
+    x = Math.floor(q.x),
+    y = Math.floor(q.y);
+  if (x < 0 || y < 0 || x >= l.canvas.width || y >= l.canvas.height)
+    return false;
+  if (l.mask && !l.mask.getContext("2d").getImageData(x, y, 1, 1).data[3])
+    return false;
+  return l.canvas.getContext("2d").getImageData(x, y, 1, 1).data[3] > 0;
+}
 export function localPoint(l, p) {
   const a = (-l.rotation * Math.PI) / 180,
     dx = p.x - l.x,
@@ -191,6 +252,7 @@ export class Editor {
     this.selection = null;
     this.onchange = () => {};
     this.busy = false;
+    this.filePath = null;
   }
   get active() {
     return this.doc?.layers.find((l) => l.id === this.doc.active);
@@ -209,6 +271,7 @@ export class Editor {
       c.fillRect(0, 0, w, h);
     }
     this.doc = { width: w, height: h, dpi, name, layers: [l], active: l.id };
+    this.filePath = null;
     this.selection = null;
     this.history = [];
     this.index = -1;
@@ -314,21 +377,7 @@ export class Editor {
   duplicate() {
     const l = this.active;
     if (!l) return;
-    const copy = layer(l.name + " 副本", l.canvas.width, l.canvas.height);
-    Object.assign(copy, {
-      ...l,
-      id: copy.id,
-      name: copy.name,
-      canvas: copy.canvas,
-      mask: null,
-    });
-    copy.canvas.getContext("2d").drawImage(l.canvas, 0, 0);
-    if (l.mask) {
-      copy.mask = canvas(l.mask.width, l.mask.height);
-      copy.mask.getContext("2d").drawImage(l.mask, 0, 0);
-    }
-    if (l.text) copy.text = structuredClone(l.text);
-    this.add(copy, "复制图层");
+    this.add(cloneLayer(l), "复制图层");
   }
   remove() {
     if (this.doc.layers.length === 1) throw Error("请保留至少一个图层");
@@ -338,14 +387,52 @@ export class Editor {
     this.commit("删除图层");
   }
   moveLayer(direction) {
-    const i = this.doc.layers.indexOf(this.active),
-      j = i + direction;
-    if (j < 0 || j >= this.doc.layers.length) return;
-    [this.doc.layers[i], this.doc.layers[j]] = [
-      this.doc.layers[j],
-      this.doc.layers[i],
-    ];
+    const i = this.doc.layers.indexOf(this.active);
+    this.reorder(i, i + direction);
+  }
+  reorder(from, to) {
+    to = Math.max(0, Math.min(this.doc.layers.length - 1, to));
+    if (from === to || from < 0) return;
+    const [l] = this.doc.layers.splice(from, 1);
+    this.doc.layers.splice(to, 0, l);
     this.commit("调整图层顺序");
+  }
+  resizeImage(w, h, dpi = this.doc.dpi) {
+    checkSize(w, h);
+    if (!Number.isFinite(dpi) || dpi < 1 || dpi > 9600)
+      throw Error("分辨率需为 1–9600");
+    const fx = w / this.doc.width,
+      fy = h / this.doc.height;
+    for (const l of this.doc.layers) {
+      const sx = l.scaleX * fx,
+        sy = l.scaleY * fy;
+      if ([sx, sy].some((s) => Math.abs(s) < 0.001 || Math.abs(s) > 1000))
+        throw Error("缩放比例超出图层变换范围");
+    }
+    for (const l of this.doc.layers)
+      Object.assign(l, {
+        x: l.x * fx,
+        y: l.y * fy,
+        scaleX: l.scaleX * fx,
+        scaleY: l.scaleY * fy,
+      });
+    Object.assign(this.doc, { width: w, height: h, dpi });
+    this.selection = null;
+    this.commit("图像大小");
+  }
+  resizeCanvas(w, h, anchor = { x: 0.5, y: 0.5 }, dpi = this.doc.dpi) {
+    checkSize(w, h);
+    if (!Number.isFinite(dpi) || dpi < 1 || dpi > 9600)
+      throw Error("分辨率需为 1–9600");
+    const dx = Math.round((w - this.doc.width) * anchor.x),
+      dy = Math.round((h - this.doc.height) * anchor.y);
+    for (const l of this.doc.layers) {
+      l.x += dx;
+      l.y += dy;
+    }
+    Object.assign(this.doc, { width: w, height: h, dpi });
+    this.selection = null;
+    this.commit("画布大小");
   }
   mask() {
     const l = this.active;
@@ -446,6 +533,7 @@ export class Editor {
           l[k] = "data:image/png;base64," + (await file.async("base64"));
         }
     await this.restore(raw);
+    this.filePath = null;
     this.history = [];
     this.index = -1;
     this.commit("打开项目");
@@ -634,6 +722,7 @@ export class Editor {
       layers: leaves,
     };
     await this.restore(raw);
+    this.filePath = null;
     this.history = [];
     this.index = -1;
     this.commit("导入原版 Compositor");
@@ -719,6 +808,7 @@ export class Editor {
       layers: leaves.reverse().map(serializeLayer),
     };
     await this.restore(raw);
+    this.filePath = null;
     this.history = [];
     this.index = -1;
     this.commit("打开栅格 PSD");
@@ -766,31 +856,36 @@ export class Editor {
     l.text = null;
     this.commit("滤镜 / " + type);
   }
-  crop() {
-    const r = this.selection;
-    if (!r) throw Error("先用矩形选框选定裁切区域");
-    const x = Math.max(0, Math.floor(r.x)),
-      y = Math.max(0, Math.floor(r.y)),
-      w = Math.min(this.doc.width - x, Math.round(r.w)),
-      h = Math.min(this.doc.height - y, Math.round(r.h));
+  crop(rect = this.selection, deletePixels = false) {
+    if (!rect) throw Error("先用矩形选框选定裁切区域");
+    const x = Math.round(rect.x),
+      y = Math.round(rect.y),
+      w = Math.round(rect.w),
+      h = Math.round(rect.h);
     checkSize(w, h);
-    this.doc.layers = this.doc.layers.map((l) => {
-      const out = layer(l.name, w, h),
-        c = canvas(this.doc.width, this.doc.height);
-      drawLayer(c.getContext("2d"), { ...l, visible: true }, false);
-      out.canvas.getContext("2d").drawImage(c, x, y, w, h, 0, 0, w, h);
-      Object.assign(out, {
-        id: l.id,
-        visible: l.visible,
-        locked: l.locked,
-        opacity: l.opacity,
-        blend: l.blend,
+    if (deletePixels)
+      this.doc.layers = this.doc.layers.map((l) => {
+        const out = layer(l.name, w, h),
+          ctx = out.canvas.getContext("2d");
+        ctx.translate(-x, -y);
+        drawLayer(ctx, { ...l, visible: true }, false);
+        Object.assign(out, {
+          id: l.id,
+          visible: l.visible,
+          locked: l.locked,
+          opacity: l.opacity,
+          blend: l.blend,
+        });
+        return out;
       });
-      return out;
-    });
+    else
+      for (const l of this.doc.layers) {
+        l.x -= x;
+        l.y -= y;
+      }
     this.doc.width = w;
     this.doc.height = h;
     this.selection = null;
-    this.commit("裁切画布（栅格化）");
+    this.commit(deletePixels ? "裁剪（删除像素）" : "裁剪");
   }
 }
